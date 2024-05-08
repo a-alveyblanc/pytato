@@ -482,6 +482,14 @@ class Array(Taggable):
         def dtype(self) -> np.dtype[Any]:
             raise NotImplementedError
 
+        @property
+        def itemsize(self) -> int:
+            raise NotImplementedError
+
+        @property
+        def nbytes(self) -> int:
+            raise NotImplementedError
+
     @property
     def size(self) -> ShapeComponent:
         from pytools import product
@@ -1720,6 +1728,14 @@ class DataWrapper(InputArgumentBase):
     @property
     def dtype(self) -> np.dtype[Any]:
         return self.data.dtype
+
+    @property
+    def itemsize(self) -> int:
+        return np.dtype(self.data.dtype).itemsize
+
+    @property
+    def nbytes(self) -> int:
+        return np.prod(self._shape)*self.itemsize
 
 # }}}
 

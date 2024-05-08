@@ -197,10 +197,11 @@ def call_loopy(translation_unit: "lp.TranslationUnit",
 
     # {{{ sanity checks
 
-    if any(arg.is_input and arg.is_output
-            for arg in translation_unit[entrypoint].args):
-        # Pytato DAG cannot have stateful nodes.
-        raise ValueError("Cannot call a kernel with side-effects.")
+    for arg in translation_unit[entrypoint].args:
+        if arg.is_input and arg.is_output:
+            # Pytato DAG cannot have stateful nodes.
+            raise ValueError(f"'{arg}' is both an input and output argument. "
+                             "Cannot call a kernel with side-effects.")
 
     for name in bindings:
         if name not in translation_unit[entrypoint].arg_dict:
@@ -463,7 +464,9 @@ def extend_bindings_with_shape_inference(knl: lp.LoopKernel,
                 continue
 
             assert isinstance(lp_arg, lp.ValueArg)
-            assert isinstance(pt_arg, (int, Array))
+
+            # FIXME: should use IntegralT somehow
+            assert isinstance(pt_arg, (int, np.integer, Array))
             pt_arg_expr = pt_subst_map(_get_pt_dim_expr(pt_arg))
             lp_arg_expr = lp_subst_map(prim.Variable(lp_arg.name))
             constraints.append((pt_arg_expr, lp_arg_expr))
