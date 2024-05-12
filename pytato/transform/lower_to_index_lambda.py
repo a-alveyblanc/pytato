@@ -37,7 +37,7 @@ from pytato.array import (Array, IndexLambda, Stack, Concatenate,
                           AdvancedIndexInNoncontiguousAxes,
                           NormalizedSlice, ShapeType,
                           AbstractResultWithNamedArrays)
-from pytato.scalar_expr import ScalarExpression, INT_CLASSES
+from pytato.scalar_expr import ScalarExpression, INT_CLASSES, IntegralT
 from pytato.diagnostic import CannotBeLoweredToIndexLambda
 from pytato.tags import AssumeNonNegative
 from pytato.transform import Mapper
@@ -51,58 +51,30 @@ def _get_reshaped_indices(expr: Reshape) -> Tuple[ScalarExpression, ...]:
         assert expr.size == 1
         return ()
 
-    if expr.order.upper() not in ["C", "F"]:
-        raise NotImplementedError("Order expected to be 'C' or 'F'",
-                                  f"(case insensitive) found {expr.order}")
+    if expr.order != "C":
+        raise NotImplementedError(expr.order)
 
-    order = expr.order
-    oldshape = expr.array.shape
-    newshape = expr.shape
-
-    # {{{ compute strides
-
-    oldstrides = [1]
-    oldstride_axes = (reversed(oldshape[1:]) if order == "C" else oldshape[:-1])
-
-    for ax_len in oldstride_axes:
-        assert isinstance(ax_len, INT_CLASSES)
-        oldstrides.append(oldstrides[-1]*ax_len)
-
-    newstrides = [1]
-    newstride_axes = (reversed(newshape[1:]) if order == "C" else newshape[:-1])
-
-    for ax_len in newstride_axes:
-        assert isinstance(ax_len, INT_CLASSES)
-        newstrides.append(newstrides[-1]*ax_len)
-
-    # }}}
-
-    # {{{ compute size tills
-
-    oldsizetills = [oldshape[-1] if order == "C" else oldshape[0]]
-    oldsizetill_ax = (oldshape[:-1][::-1] if order == "C" else oldshape[:-1])
-    for ax_len in oldsizetill_ax:
-        oldsizetills.append(oldsizetills[-1]*ax_len)
-
-    # }}}
-
-    # {{{ if order is C, then computed info is backwards
-
-    if order == "C":
-        oldstrides = oldstrides[::-1]
-        newstrides = newstrides[::-1]
-        oldsizetills = oldsizetills[::-1]
-
-    # }}}
+    newstrides: List[IntegralT] = [1]  # reshaped array strides
+    for new_axis_len in reversed(expr.shape[1:]):
+        assert isinstance(new_axis_len, INT_CLASSES)
+        newstrides.insert(0, newstrides[0]*new_axis_len)
 
     flattened_idx = sum(prim.Variable(f"_{i}")*stride
-        for i, stride in enumerate(newstrides))
+                        for i, stride in enumerate(newstrides))
 
-    ret = tuple(
-        (flattened_idx % sizetill) // stride
-        for stride, sizetill in zip(oldstrides, oldsizetills))
+    oldstrides: List[IntegralT] = [1]  # input array strides
+    for axis_len in reversed(expr.array.shape[1:]):
+        assert isinstance(axis_len, INT_CLASSES)
+        oldstrides.insert(0, oldstrides[0]*axis_len)
 
-    return ret
+    assert isinstance(expr.array.shape[-1], INT_CLASSES)
+    oldsizetills = [expr.array.shape[-1]]  # input array size till for axes idx
+    for old_axis_len in reversed(expr.array.shape[:-1]):
+        assert isinstance(old_axis_len, INT_CLASSES)
+        oldsizetills.insert(0, oldsizetills[0]*old_axis_len)
+
+    return tuple(((flattened_idx % sizetill) // stride)
+                 for stride, sizetill in zip(oldstrides, oldsizetills))
 
 
 class ToIndexLambdaMixin:
