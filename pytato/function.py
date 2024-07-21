@@ -125,7 +125,8 @@ class FunctionDefinition(Taggable):
     """
     parameters: FrozenSet[str]
     return_type: ReturnType
-    returns: Mapping[str, Array]
+    returns: Mapping[str, Array] = attrs.field(
+        validator=attrs.validators.instance_of(immutabledict))
     tags: FrozenSet[Tag] = attrs.field(kw_only=True)
 
     @cached_property
@@ -229,7 +230,9 @@ class NamedCallResult(NamedArray):
                  name: str) -> None:
         super().__init__(call, name,
                          axes=call.function.returns[name].axes,
-                         tags=call.function.returns[name].tags)
+                         tags=call.function.returns[name].tags,
+                         non_equality_tags=(
+                             call.function.returns[name].non_equality_tags))
 
     def with_tagged_axis(self, iaxis: int,
                          tags: Union[Sequence[Tag], Tag]) -> Array:
@@ -276,7 +279,8 @@ class Call(AbstractResultWithNamedArrays):
 
     """
     function: FunctionDefinition
-    bindings: Mapping[str, Array]
+    bindings: Mapping[str, Array] = attrs.field(
+        validator=attrs.validators.instance_of(immutabledict))
 
     _mapper_method: ClassVar[str] = "map_call"
 

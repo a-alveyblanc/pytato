@@ -78,7 +78,8 @@ class LoopyCall(AbstractResultWithNamedArrays):
     :mod:`loopy` translation unit.
     """
     translation_unit: "lp.TranslationUnit"
-    bindings: Mapping[str, ArrayOrScalar]
+    bindings: Mapping[str, ArrayOrScalar] = \
+        attrs.field(validator=attrs.validators.instance_of(immutabledict))
     entrypoint: str
 
     _mapper_method: ClassVar[str] = "map_loopy_call"
@@ -272,7 +273,7 @@ def call_loopy(translation_unit: "lp.TranslationUnit",
 
 # {{{ shape inference
 
-class ShapeInferenceFailure(RuntimeError):
+class ShapeInferenceFailure(RuntimeError):  # noqa: N818
     pass
 
 
