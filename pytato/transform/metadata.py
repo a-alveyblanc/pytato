@@ -197,6 +197,8 @@ class AxesTagsEquationCollector(Mapper):
         Records equations for *ary*\'s axis tags of type :attr:`tag_t`.
         """
         for iaxis, axis in enumerate(ary.axes):
+            if axis.tags_of_type(AxisIgnoredForPropagationTag):
+                continue
             lhs_var = self.get_var_for_axis(ary, iaxis)
             for tag in axis.tags_of_type(self.tag_t):
                 rhs_var = self.get_var_for_tag(tag)
@@ -522,9 +524,12 @@ class AxesTagsEquationCollector(Mapper):
             descr_to_var[EinsumElementwiseAxis(iaxis)] = self.get_var_for_axis(expr,
                                                                                iaxis)
 
-        for access_descrs, arg in zip(expr.access_descriptors,
-                                      expr.args):
+        for access_descrs, arg in zip(expr.access_descriptors, expr.args):
             for iarg_axis, descr in enumerate(access_descrs):
+                if arg.axes[iarg_axis].tags_of_type(
+                        AxisIgnoredForPropagationTag):
+                    continue
+
                 in_tag_var = self.get_var_for_axis(arg, iarg_axis)
 
                 if descr in descr_to_var:
@@ -706,22 +711,15 @@ def unify_axes_tags(
     # Defn. A Propagation graph is a graph where nodes denote variables and an
     # edge between 2 nodes denotes an equality criterion.
 
-    from pytools.graph import (
-        get_reachable_nodes,
-        undirected_graph_from_edges,
-    )
+    from pytools.graph import get_reachable_nodes, undirected_graph_from_edges
 
     known_tag_vars = frozenset(equations_collector.known_tag_to_var.values())
     axis_to_solved_tags: dict[tuple[Array, int], set[Tag]] = {}
 
     propagation_graph = undirected_graph_from_edges(
-        equations_collector.equations
-    )
+        equations_collector.equations)
 
     for tag, var in equations_collector.known_tag_to_var.items():
-        if isinstance(tag, AxisIgnoredForPropagationTag):
-            continue
-
         reachable_nodes = get_reachable_nodes(propagation_graph, var)
         for reachable_var in (reachable_nodes - known_tag_vars):
             axis_to_solved_tags.setdefault(
