@@ -1,4 +1,5 @@
 from __future__ import annotations
+from traceback import FrameSummary, StackSummary
 
 
 __copyright__ = """
@@ -296,19 +297,25 @@ def normalize_shape(
 # {{{ array interface
 
 ConvertibleToIndexExpr = Union[int, slice, "Array", None, EllipsisType]
-IndexExpr = Union[IntegerT, "NormalizedSlice", "Array", None]
+IndexExpr = Union[IntegerT, "NormalizedSlice", "Array", None, EllipsisType]
+DtypeOrScalar = Union[_dtype_any, ScalarT]
+ArrayOrScalar = Union["Array", ScalarT]
 PyScalarType = type[bool] | type[int] | type[float] | type[complex]
 DtypeOrPyScalarType = _dtype_any | PyScalarType
 
 
-def _np_result_dtype(
-        *arrays_and_dtypes: np.typing.ArrayLike | np.typing.DTypeLike,
+# https://github.com/numpy/numpy/issues/19302
+def _np_result_type(
+        # actual dtype:
+        #*arrays_and_dtypes: Union[np.typing.ArrayLike, np.typing.DTypeLike],
+        # our dtype:
+        *arrays_and_dtypes: DtypeOrScalar,
         ) -> np.dtype[Any]:
     return np.result_type(*arrays_and_dtypes)
 
 
-def _truediv_result_type(*dtypes: DtypeOrPyScalarType) -> np.dtype[Any]:
-    dtype = _np_result_dtype(*dtypes)
+def _truediv_result_type(arg1: DtypeOrScalar, arg2: DtypeOrScalar) -> np.dtype[Any]:
+    dtype = _np_result_type(arg1, arg2)
     # See: test_true_divide in numpy/core/tests/test_ufunc.py
     # pylint: disable=no-member
     if dtype.kind in "iu":
@@ -571,11 +578,12 @@ class Array(Taggable):
 
     def _binary_op(
                 self,
-                op: Callable[[ScalarExpression, ScalarExpression], ScalarExpression],
+                op: Callable[[ScalarExpression, ScalarExpression],
+                             ScalarExpression],
                 other: ArrayOrScalar,
                 get_result_type: Callable[
                         [ArrayOrScalar, ArrayOrScalar],
-                        np.dtype[Any]] = _np_result_dtype,
+                        np.dtype[Any]] = _np_result_type,
                 reverse: bool = False,
                 cast_to_result_dtype: bool = True,
                 is_pow: bool = False,
@@ -632,21 +640,33 @@ class Array(Taggable):
                 non_equality_tags=_get_created_at_tag(),
                 var_to_reduction_descr=immutabledict())
 
-    __mul__ = partialmethod(_binary_op, operator.mul)
-    __rmul__ = partialmethod(_binary_op, operator.mul, reverse=True)
+    # NOTE: Initializing the expression to "prim.Product(expr1, expr2)" is
+    # essential as opposed to performing "expr1 * expr2". This is to account
+    # for pymbolic's implementation of the "*" operator which might not
+    # instantiate the node corresponding to the operation when one of
+    # the operands is the neutral element of the operation.
+    #
+    # For the same reason 'prim.(Sum|FloorDiv|Quotient)' is preferred over the
+    # python operators on the operands.
 
-    __add__ = partialmethod(_binary_op, operator.add)
-    __radd__ = partialmethod(_binary_op, operator.add, reverse=True)
+    __mul__ = partialmethod(_binary_op, lambda l, r: prim.Product((l, r)))
+    __rmul__ = partialmethod(_binary_op, lambda l, r: prim.Product((l, r)),
+                             reverse=True)
 
-    __sub__ = partialmethod(_binary_op, operator.sub)
-    __rsub__ = partialmethod(_binary_op, operator.sub, reverse=True)
+    __add__ = partialmethod(_binary_op, lambda l, r: prim.Sum((l, r)))
+    __radd__ = partialmethod(_binary_op, lambda l, r: prim.Sum((l, r)),
+                             reverse=True)
 
-    __floordiv__ = partialmethod(_binary_op, operator.floordiv)
-    __rfloordiv__ = partialmethod(_binary_op, operator.floordiv, reverse=True)
+    __sub__ = partialmethod(_binary_op, lambda l, r: prim.Sum((l, -r)))
+    __rsub__ = partialmethod(_binary_op, lambda l, r: prim.Sum((l, -r)),
+                             reverse=True)
 
-    __truediv__ = partialmethod(_binary_op, operator.truediv,
+    __floordiv__ = partialmethod(_binary_op, prim.FloorDiv)
+    __rfloordiv__ = partialmethod(_binary_op, prim.FloorDiv, reverse=True)
+
+    __truediv__ = partialmethod(_binary_op, prim.Quotient,
             get_result_type=_truediv_result_type)
-    __rtruediv__ = partialmethod(_binary_op, operator.truediv,
+    __rtruediv__ = partialmethod(_binary_op, prim.Quotient,
             get_result_type=_truediv_result_type, reverse=True)
 
     __mod__ = partialmethod(_binary_op, operator.mod)
@@ -1397,7 +1417,7 @@ class Stack(_SuppliedAxesAndTagsMixin, Array):
 
     @property
     def dtype(self) -> np.dtype[Any]:
-        return _np_result_dtype(*(arr.dtype for arr in self.arrays))
+        return _np_result_type(*(arr.dtype for arr in self.arrays))
 
     @property
     def shape(self) -> ShapeType:
@@ -1430,7 +1450,7 @@ class Concatenate(_SuppliedAxesAndTagsMixin, Array):
 
     @property
     def dtype(self) -> np.dtype[Any]:
-        return _np_result_dtype(*(arr.dtype for arr in self.arrays))
+        return _np_result_type(*(arr.dtype for arr in self.arrays))
 
     @property
     def shape(self) -> ShapeType:
@@ -1547,6 +1567,7 @@ class Reshape(_SuppliedAxesAndTagsMixin, IndexRemappingBase):
 
     if __debug__:
         def __attrs_post_init__(self) -> None:
+            # assert self.non_equality_tags
             super().__attrs_post_init__()
 
     @property
@@ -2058,9 +2079,9 @@ def reshape(array: Array, newshape: int | Sequence[int],
         *and* the output array are linearized according to this order
         and 'matched up'.
 
-        Groups are found by multiplying axis lengths on the input and output side,
-        a matching input/output group is found once adding an input or axis to the
-        group makes the two products match.
+        Groups are found by multiplying axis lengths on the input and output
+        side, a matching input/output group is found once adding an input or
+        axis to the group makes the two products match.
 
         The semantics are identical to :func:`numpy.reshape`.
 
