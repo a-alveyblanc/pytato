@@ -43,6 +43,7 @@ import logging
 from typing import (
     TYPE_CHECKING,
     Any,
+    TypeVar,
     cast,
 )
 
@@ -93,6 +94,9 @@ if TYPE_CHECKING:
 
     from pytato.function import NamedCallResult
     from pytato.loopy import LoopyCall
+
+
+GraphNodeT = TypeVar("GraphNodeT")
 
 
 # {{{ AxesTagsEquationCollector
@@ -153,7 +157,7 @@ class AxesTagsEquationCollector(Mapper[None, []]):
         # axis_to_var: mapping from (array, iaxis) to the variable to be
         # used for unification.
         self.axis_to_var: bidict[tuple[Array, int], str] = bidict()
-        self.known_tag_to_var: bidict[Tag, str] = bidict()
+        self.known_tag_to_var: dict[Tag, str] = {}
 
         self.equations: list[tuple[str, str]] = []
 
@@ -700,58 +704,29 @@ def unify_axes_tags(
     # Defn. A Propagation graph is a graph where nodes denote variables and an
     # edge between 2 nodes denotes an equality criterion.
 
-    from pytools.graph import undirected_graph_from_edges
+    from pytools.graph import (
+        get_reachable_nodes,
+        undirected_graph_from_edges,
+    )
 
+    known_tag_vars = frozenset(equations_collector.known_tag_to_var.values())
     axis_to_solved_tags: dict[tuple[Array, int], set[Tag]] = {}
 
     propagation_graph = undirected_graph_from_edges(
-        equations_collector.equations)
+        equations_collector.equations
+    )
 
-    def get_reachable_nodes(
-            undirected_graph: Mapping[str, Collection[str]],
-            source_node: str) -> frozenset[str]:
-        """
-        Partitions a graph along nodes representing axes tagged with
-        `AxisIgnoredForPropagationTag` or nodes representing the
-        `AxisIgnoredForPropagationTag` itself. Returns a set of nodes reachable
-        by *source_node* in partitioned subgraph(s) of *undirected_graph*.
-        """
-        nodes_visited = set()
-        reachable_nodes = set()
-        nodes_to_visit = {source_node}
-
-        while nodes_to_visit:
-            current_node = nodes_to_visit.pop()
-            nodes_visited.add(current_node)
-
-            if current_node in known_ax_vars:
-                ary, ax = equations_collector.axis_to_var.inverse[current_node]
-                if not ary.axes[ax].tags_of_type(AxisIgnoredForPropagationTag):
-                    reachable_nodes.add(current_node)
-
-            new_nodes_to_visit = set()
-            for node in undirected_graph[current_node]:
-                if node in known_ax_vars:
-                    ary, ax = equations_collector.axis_to_var.inverse[node]
-                    if ary.axes[ax].tags_of_type(AxisIgnoredForPropagationTag):
-                        continue
-                elif node in known_tag_vars:
-                    tag = equations_collector.known_tag_to_var.inverse[node]
-                    if isinstance(tag, AxisIgnoredForPropagationTag):
-                        continue
-
-                if node not in nodes_visited:
-                    new_nodes_to_visit.add(node)
-
-            nodes_to_visit.update(new_nodes_to_visit)
-
-        return frozenset(reachable_nodes)
-
-    known_tag_vars = frozenset(equations_collector.known_tag_to_var.values())
-    known_ax_vars = frozenset(equations_collector.axis_to_var.values())
+    ignored_vars = set()
+    for (ary, ax), ax_var in equations_collector.axis_to_var.items():
+        tags = ary.axes[ax].tags_of_type(AxisIgnoredForPropagationTag)
+        if tags:
+            ignored_vars.add(ax_var)
+            for tag in tags:
+                ignored_vars.add(equations_collector.known_tag_to_var[tag])
 
     for tag, var in equations_collector.known_tag_to_var.items():
-        reachable_nodes = get_reachable_nodes(propagation_graph, var)
+        reachable_nodes = get_reachable_nodes(propagation_graph, var,
+                                              ignored_vars)
         for reachable_var in (reachable_nodes - known_tag_vars):
             axis_to_solved_tags.setdefault(
                 equations_collector.axis_to_var.inverse[reachable_var],
